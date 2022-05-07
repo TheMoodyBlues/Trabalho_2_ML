@@ -1,0 +1,168 @@
+---
+title: "Machine Learning"
+author: "Ana Carolina Kosinski Castilho"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE)
+
+library(tidyverse)
+library(corrplot)
+library(ggfortify)
+
+
+theme_set(theme_minimal())
+```
+
+# Dados
+
+Os dados utilizados foram obtidos em [https://github.com/qcrit/DSH-2018-LatinProseVerse](https://github.com/qcrit/DSH-2018-LatinProseVerse) e são referentes a características textuais de obras em latim. Nosso objetivo é diferenciar quais dos textos são escritos em prosa e quais são escritos em verso a partir das caracteristicas presentes nos mesmos.
+
+Abaixo apresentamos um pequeno resumo dos dados presentes:
+
+
+```{r}
+data <- read_csv("stylometry_data_final.csv")
+
+sum(is.na(data))
+```
+
+Felizmente não existe nenhum valor vazio na base de dados, iremos apenas reordenar as colunas para facilitar manipulações futuras trazendo o nome e a classificação para as primeiras colunas.
+
+```{r}
+data <- data %>% 
+  relocate("Corpus Name","Type")
+```
+
+# Análise exploratória
+
+Abaixo observamos o comportamento das váriáveis presentes
+
+```{r}
+ggplot(data, aes(x = Type)) +
+  geom_bar()
+```
+
+Apesar de haver uma pequena diferença entre as classes os valores não estão desbalanceados. 
+
+```{r}
+data %>%
+  select(Type:Dum) %>% 
+  pivot_longer(`Personal Pronouns`:Dum) %>% 
+  ggplot(aes(x = value)) +
+    facet_wrap(~ name, scales = "free") +
+    geom_histogram()
+
+data %>%
+  select(Type, Quin:Sentences) %>% 
+  pivot_longer(Quin:Sentences) %>% 
+  ggplot(aes(x = value)) +
+    facet_wrap(~ name, scales = "free") +
+    geom_histogram()
+```
+
+Como a maioria das variáveis vêm de contagem de palavras ou termos, observamos um comportamento típico de decaimento de frequência, além de escalas muito similares. Porém observamos algumas variáveis como "Words" (número de palavras) em escalas diferentes, portanto iremos padronizar todas as variáveis presentes centrando-as em 0.
+
+```{r}
+data <- data %>% 
+  mutate(across(where(is.numeric), scale))
+```
+
+A fim de entender se há realmente uma diferença perceptível entre as classes, observamos em seguida cada uma das variáveis condicionadas ao tipo.
+
+```{r}
+data %>%
+  select(Type:Dum) %>% 
+  pivot_longer(`Personal Pronouns`:Dum) %>% 
+  ggplot(aes(x = Type, y = value)) +
+    facet_wrap(~ name, scales = "free") +
+    geom_boxplot()
+
+data %>%
+  select(Type, Quin:Conjunctions) %>% 
+  pivot_longer(Quin:Conjunctions) %>% 
+  ggplot(aes(x = Type, y = value)) +
+    facet_wrap(~ name, scales = "free") +
+    geom_boxplot()
+
+data %>%
+  select(Type, Vocatives:Sentences) %>% 
+  pivot_longer(Vocatives:Sentences) %>% 
+  ggplot(aes(x = Type, y = value)) +
+    facet_wrap(~ name, scales = "free") +
+    geom_boxplot()
+```
+
+Como esperado os comportamentos são bem dispersosm porém conseguimos observar em alguns casos que as médias são bem distintas entre as classes, como por exemplo em "Alius", Demonstrative Pronouns", "Dum", "Prepositions", "Relative Clauses", "Superlatives","Ut" e "Vocatives".
+
+Considerando a natureza dos dados, esperamos que haja uma grande correlação entre as variáveis presentes, a seguir exploramos esses valores
+
+```{r}
+M = cor(data[3:31])
+
+corrplot(M, type = "lower", tl.pos = "l", order = "FPC")
+```
+
+Como esperado diversos termos apresentam correlação, observamos especialmente que o número de palavras e caracteres apresenta uma correlação forte, assim como o número de sentenças e conjunções. Ambas essas correlações são esperadas pois mais caracteres implicam em mais palavras e mais frases implicam em mais conjunções, porém as demais correlações também nos indicam padrões da construção gramatical latina em geral.
+
+Para melhor entendimento dos dados, antes de aplicar os algoritmos de classificação faremos uma análise de componentes principais e uma análise fatorial na base completa, a fim de identificar quais são as estruturas que mais se destacam nos dados e se há algum comportamento que aponta quais são as variáveis com papel importante no passo de classificação.
+
+## Análise de componentes principais
+
+```{r}
+pca <- prcomp(data[3:31])
+var <- summary(pca)[["importance"]]['Proportion of Variance',]
+par(mfrow = c(1,2))
+plot(var, type = 'l')
+plot(cumsum(var), type = 'l')
+```
+
+Como esperado, devido à alta correlação das variáveis, conseguimos observar grande parte da variânca dos dados com um numero relativamente baixo se componentes. Temos, por exemplo, aproximadamente 60% da variância explicada pelos 5 primeiros componentes.
+Como nosso objetivo nessse momento é ter um entendimento melhor dos dados, observaremos a composição dos dois primeiros componentes que contemplam 38% da variância.
+
+```{r}
+autoplot(pca, data = data, colour = "Type",
+         loadings = T, loadings.colour = 'gray',
+         loadings.label = TRUE, loadings.label.size = 3)
+
+```
+
+Já com os dois primeiros componentes é observada uma divisão relativamente bem definida entre os tipos, para valores mais altos do primeiro compontente temos mais ocorrências de texto em verso, enquanto para valores mais negativos observamos mais textos em prosa.
+É interessante observar que os valores positivos do primeiro componente possuem grande peso das variáveis "Dum" e "Vocatives", que também apresentaram uma correlação negativa com grande parte das variáveis, variáveis estas que compõem a parte negativa do primeiro componente. Com esse resultado esperamos que essas variáveis sejam de grande importância para a diferenciação entre verso e prosa. 
+
+## Análise fatorial
+
+Como última ferramenta de entendimento dos dados antes de aplicarmos algoritmos para predição, aplicaremos uma análise com 3 fatores, esse número foi escolhido justamente pois estamos buscando distinguir duas classes, em um cenário ideal dois dos fatores alocariam características distintas de cada um dos tipos e um terceiro fator seria composto pelas características comuns entre eles.
+
+
+```{r}
+(fat <- factanal(data[3:31], factors = 3))
+
+loadings <- data.frame(matrix(as.numeric(fat$loadings),
+                              attributes(fat$loadings)$dim,
+                              dimnames=attributes(fat$loadings)$dimnames))
+
+loadings.m <- loadings %>%
+  rownames_to_column(var = "Caracteristica") %>% 
+  pivot_longer( cols = Factor1:Factor3, names_to = "Factor", values_to = "Loading")
+
+ggplot(loadings.m, aes(Caracteristica, abs(Loading), fill=Loading)) + 
+  facet_wrap(~ Factor, nrow=1) +
+  geom_bar(stat="identity") +
+  coord_flip() +
+  scale_fill_gradient2(name = "Loading", 
+                       high = "blue", mid = "white", low = "red", 
+                       midpoint=0, guide="none") +
+  ylab("Loading Strength") +
+  theme_minimal(base_size=10)
+```
+
+Vemos claramente que o terceiro fator contempla apenas o tamanho geral do texto, pois as variáveis nele presente são apenas "Words", "Sentences" e "Characters", sendo assim nosso foco será o entendimento dos fatores 1 e 2.
+
+No primeiro fator conseguimos ver uma presença maior de clausulas relativas e em segundo plano temos pesos muito similares entre grande parte das variáveis que observamos forte correlação anteriormente. Vale notar que essas construções estão presentes geralmente em construções mais longas ou que indicam uma sequência de ideias.
+
+Para o segundo fator observamos uma forte presença negativa das variáveis "Mean Sentence Lenght" e "Mean Length Relative Clauses", o que nos indica que esse fator contempla frases mais curtas (normalmente presentes em prosa), as variáveis que apresentam peso mais forte nesse compontente também nos apontam para esse caminho, pois são termos utilizados em construções mais curtas e diretas.
+
+Com esses resultados a tarefa de divisão entre os tipos de texto parece estar logo ao alcance, pois métodos simples já estão apontando diferenças que, intuiivamente, observamos entre prosa e poesia, logo podemos esperar que os modelos aplicados a seguir apresentem um desempenho considerável.
